@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
@@ -10,7 +10,7 @@ namespace TemperatureAnalyzer
     public partial class RunningForm : Form
     {
         private List<RunningData> _data;
-        private MovingAverageForecaster _forecaster;
+       // private MovingAverageForecaster _forecaster;
         private List<double> _forecastValues;
 
         // Контролы
@@ -25,7 +25,7 @@ namespace TemperatureAnalyzer
 
         public RunningForm()
         {
-            _forecaster = new MovingAverageForecaster();
+            //_forecaster = new MovingAverageForecaster();
             _forecastValues = new List<double>();
             InitializeComponents();
             HookEvents();
@@ -253,7 +253,7 @@ namespace TemperatureAnalyzer
 
             try
             {
-                _forecastValues = _forecaster.Forecast(historicalValues, windowSize, forecastDays);
+                //_forecastValues = _forecaster.Forecast(historicalValues, windowSize, forecastDays);
 
                 string forecastText = "📊 Прогноз дистанции (скользящая средняя):\n\n";
                 for (int i = 0; i < _forecastValues.Count; i++)
@@ -315,13 +315,15 @@ namespace TemperatureAnalyzer
 
             int width = graphPanel.Width;
             int height = graphPanel.Height;
-            if (width <= 20 || height <= 20) return;
+
+            // Защита от слишком маленьких размеров
+            if (width <= 30 || height <= 30) return;
 
             int marginLeft = 60, marginRight = 40, marginTop = 30, marginBottom = 50;
             int graphWidth = width - marginLeft - marginRight;
             int graphHeight = height - marginTop - marginBottom;
 
-            if (graphWidth <= 0 || graphHeight <= 0) return;
+            if (graphWidth <= 10 || graphHeight <= 10) return;
 
             // Рисуем оси
             using (Pen axisPen = new Pen(Color.Black, 2))
@@ -330,18 +332,18 @@ namespace TemperatureAnalyzer
                 g.DrawLine(axisPen, marginLeft, marginTop + graphHeight, marginLeft + graphWidth, marginTop + graphHeight);
             }
 
-            // Подписи осей
-            using (Font axisFont = new Font("Segoe UI", 10, FontStyle.Bold))
-            {
-                g.DrawString("День", axisFont, Brushes.Black, marginLeft + graphWidth / 2 - 15, marginTop + graphHeight + 30);
-                DrawRotatedText(g, "Дистанция (км)", axisFont, Brushes.Black, 18, marginTop + graphHeight / 2, -90);
-            }
-
             int startDay = trackStart.Value;
             int endDay = trackEnd.Value;
+
+            // Защита от выхода за границы
+            if (startDay < 1) startDay = 1;
+            if (endDay > _data.Count) endDay = _data.Count;
+            if (startDay > endDay) startDay = endDay;
+
             var filteredData = _data.Where(d => d.Day >= startDay && d.Day <= endDay).ToList();
             if (filteredData.Count == 0) return;
 
+            // Находим min/max с защитой от одинаковых значений
             double minDist = filteredData.Min(d => d.DistanceKm);
             double maxDist = filteredData.Max(d => d.DistanceKm);
 
@@ -350,57 +352,45 @@ namespace TemperatureAnalyzer
                 minDist = Math.Min(minDist, _forecastValues.Min());
                 maxDist = Math.Max(maxDist, _forecastValues.Max());
             }
-            if (Math.Abs(maxDist - minDist) < 0.1)
+
+            if (Math.Abs(maxDist - minDist) < 0.01)
             {
                 minDist = 0;
-                maxDist = maxDist + 5;
+                maxDist = maxDist + 1;
             }
-            double rangeY = maxDist - minDist;
 
+            double rangeY = maxDist - minDist;
+            if (rangeY <= 0) rangeY = 1;
+
+            // Безопасные функции преобразования с проверкой на NaN/Infinity
             Func<int, float> dayToX = (day) =>
             {
-                return marginLeft + (float)((day - startDay) * graphWidth / (double)(endDay - startDay));
+                if (endDay == startDay) return marginLeft + graphWidth / 2f;
+                float result = marginLeft + (float)((day - startDay) * graphWidth / (double)(endDay - startDay));
+                if (float.IsNaN(result) || float.IsInfinity(result)) return marginLeft;
+                return Math.Max(marginLeft, Math.Min(marginLeft + graphWidth, result));
             };
+
             Func<double, float> distToY = (dist) =>
             {
-                return marginTop + graphHeight - (float)((dist - minDist) * graphHeight / rangeY);
+                float result = marginTop + graphHeight - (float)((dist - minDist) * graphHeight / rangeY);
+                if (float.IsNaN(result) || float.IsInfinity(result)) return marginTop + graphHeight / 2f;
+                return Math.Max(marginTop, Math.Min(marginTop + graphHeight, result));
             };
 
-            // Сетка Y
-            using (Pen gridPen = new Pen(Color.LightGray, 1))
-            using (Font tickFont = new Font("Segoe UI", 8))
+            // Рисуем график (синий)
+            using (Pen bluePen = new Pen(Color.Blue, 2.5f))
             {
-                int ySteps = 6;
-                for (int i = 0; i <= ySteps; i++)
+                var points = new List<PointF>();
+                foreach (var d in filteredData)
                 {
-                    double dist = minDist + i * rangeY / ySteps;
-                    float y = distToY(dist);
-                    g.DrawLine(gridPen, marginLeft, y, marginLeft + graphWidth, y);
-                    string label = dist.ToString("F1");
-                    SizeF labelSize = g.MeasureString(label, tickFont);
-                    g.DrawString(label, tickFont, Brushes.Black, marginLeft - labelSize.Width - 4, y - labelSize.Height / 2);
+                    float x = dayToX(d.Day);
+                    float y = distToY(d.DistanceKm);
+                    points.Add(new PointF(x, y));
                 }
-            }
 
-            // Сетка X
-            using (Pen gridPen = new Pen(Color.LightGray, 1))
-            using (Font tickFont = new Font("Segoe UI", 8))
-            {
-                int totalDays = endDay - startDay + 1;
-                int step = totalDays > 30 ? 5 : totalDays > 15 ? 3 : 2;
-                for (int day = startDay; day <= endDay; day += step)
-                {
-                    float x = dayToX(day);
-                    g.DrawLine(gridPen, x, marginTop + graphHeight, x, marginTop + graphHeight + 5);
-                    g.DrawString(day.ToString(), tickFont, Brushes.Black, x - 8, marginTop + graphHeight + 8);
-                }
-            }
-
-            // График дистанции (синий)
-            using (Pen bluePen = new Pen(Color.Blue, 3))
-            {
-                var points = filteredData.Select(d => new PointF(dayToX(d.Day), distToY(d.DistanceKm))).ToArray();
-                if (points.Length > 1) g.DrawLines(bluePen, points);
+                if (points.Count > 1)
+                    g.DrawLines(bluePen, points.ToArray());
 
                 // Точки
                 foreach (var p in points)
@@ -409,10 +399,10 @@ namespace TemperatureAnalyzer
                 }
             }
 
-            // Прогноз (зелёный пунктир)
+            // Прогноз если есть
             if (_forecastValues != null && _forecastValues.Count > 0)
             {
-                using (Pen greenPen = new Pen(Color.Green, 2.5f) { DashStyle = DashStyle.Dash })
+                using (Pen greenPen = new Pen(Color.Green, 2f) { DashStyle = DashStyle.Dash })
                 {
                     int lastDay = _data.Last().Day;
                     var forecastPoints = new List<PointF>();
@@ -421,27 +411,14 @@ namespace TemperatureAnalyzer
                         int forecastDay = lastDay + i + 1;
                         if (forecastDay >= startDay && forecastDay <= endDay)
                         {
-                            forecastPoints.Add(new PointF(dayToX(forecastDay), distToY(_forecastValues[i])));
+                            float x = dayToX(forecastDay);
+                            float y = distToY(_forecastValues[i]);
+                            forecastPoints.Add(new PointF(x, y));
                         }
                     }
                     if (forecastPoints.Count > 1)
                         g.DrawLines(greenPen, forecastPoints.ToArray());
                 }
-            }
-
-            // Легенда
-            using (Font legendFont = new Font("Segoe UI", 8, FontStyle.Bold))
-            using (Brush bgBrush = new SolidBrush(Color.FromArgb(220, Color.White)))
-            {
-                int legendX = width - 110;
-                int legendY = marginTop;
-                int legendW = 100;
-                int legendH = 40;
-                g.FillRectangle(bgBrush, legendX, legendY, legendW, legendH);
-                g.DrawRectangle(Pens.Black, legendX, legendY, legendW, legendH);
-                g.DrawString("Дистанция", legendFont, Brushes.Blue, legendX + 5, legendY + 5);
-                if (_forecastValues != null && _forecastValues.Count > 0)
-                    g.DrawString("Прогноз", legendFont, Brushes.Green, legendX + 5, legendY + 22);
             }
         }
 
